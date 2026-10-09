@@ -1,3 +1,4 @@
+
 pipeline {
     agent any
 
@@ -11,16 +12,19 @@ pipeline {
     }
 
     environment {
-        IMAGE_NAME = 'devsecops-demo'
-	DEPENDENCY_DATA = '/opt/devsecops/dependency-data-clean'
-        TRIVY_CACHE = '/opt/devsecops/trivy-cache'
+        IMAGE_NAME     = 'devsecops-demo'
+        DEPENDENCY_DATA = '/opt/devsecops/dependency-data-clean'
+        TRIVY_CACHE    = '/opt/devsecops/trivy-cache'
     }
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
-                sh 'mkdir -p reports'
+
+                sh '''
+                    mkdir -p reports
+                '''
             }
         }
 
@@ -30,8 +34,11 @@ pipeline {
                     docker run --rm \
                       -v "$WORKSPACE:/src" \
                       semgrep/semgrep:latest \
-                      semgrep scan --config auto /src \
-                      --json --output /src/reports/semgrep.json
+                      semgrep scan \
+                      --config auto \
+                      /src \
+                      --json \
+                      --output /src/reports/semgrep.json
                 '''
             }
         }
@@ -53,14 +60,32 @@ pipeline {
         stage('SCA - Dependency-Check') {
             steps {
                 sh '''
+                    set -eu
+
+                    mkdir -p "$WORKSPACE/reports"
+
+                    test -d "$DEPENDENCY_DATA" || {
+                        echo "ERROR: Dependency-Check data papkasi topilmadi"
+                        exit 1
+                    }
+
                     docker run --rm \
+                      --user "$(id -u):$(id -g)" \
                       -v "$WORKSPACE:/src" \
                       -v "$DEPENDENCY_DATA:/usr/share/dependency-check/data" \
                       owasp/dependency-check:latest \
                       --scan /src \
                       --format JSON \
-                      --out /src/reports/dependency-check.json \
+                      --out /src/reports \
                       --noupdate
+
+                    test -s "$WORKSPACE/reports/dependency-check-report.json"
+
+                    python3 -m json.tool \
+                      "$WORKSPACE/reports/dependency-check-report.json" \
+                      > /dev/null
+
+                    echo "Dependency-Check JSON hisoboti muvaffaqiyatli yaratildi."
                 '''
             }
         }
@@ -77,12 +102,15 @@ pipeline {
         stage('Container - Trivy') {
             steps {
                 sh '''
+                    mkdir -p "$TRIVY_CACHE"
+
                     docker run --rm \
                       -v /var/run/docker.sock:/var/run/docker.sock \
                       -v "$TRIVY_CACHE:/root/.cache/" \
                       -v "$WORKSPACE/reports:/reports" \
                       aquasec/trivy:latest \
-                      image --format json \
+                      image \
+                      --format json \
                       --output /reports/trivy-image.json \
                       "$IMAGE_NAME:$BUILD_NUMBER"
                 '''
@@ -98,8 +126,8 @@ pipeline {
                     APP="devsecops-app-${BUILD_NUMBER}"
 
                     cleanup() {
-                      docker rm -f "$APP" >/dev/null 2>&1 || true
-                      docker network rm "$NET" >/dev/null 2>&1 || true
+                        docker rm -f "$APP" >/dev/null 2>&1 || true
+                        docker network rm "$NET" >/dev/null 2>&1 || true
                     }
 
                     cleanup
@@ -119,6 +147,10 @@ pipeline {
                       zap-baseline.py \
                       -t "http://$APP:5000" \
                       -J zap-report.json
+
+                    test -s "$WORKSPACE/reports/zap-report.json"
+
+                    echo "OWASP ZAP hisoboti yaratildi."
                 '''
             }
         }
