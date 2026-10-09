@@ -12,7 +12,7 @@ pipeline {
 
     environment {
         IMAGE_NAME = 'devsecops-demo'
-        DEPENDENCY_DATA = '/opt/devsecops/dependency-data'
+	DEPENDENCY_DATA = '/opt/devsecops/dependency-data-clean'
         TRIVY_CACHE = '/opt/devsecops/trivy-cache'
     }
 
