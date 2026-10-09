@@ -27,7 +27,7 @@ pipeline {
         stage('SAST - Semgrep') {
             steps {
                 sh '''
-                    sudo docker run --rm \
+                    docker run --rm \
                       -v "$WORKSPACE:/src" \
                       semgrep/semgrep:latest \
                       semgrep scan --config auto /src \
@@ -39,7 +39,7 @@ pipeline {
         stage('Secrets - Gitleaks') {
             steps {
                 sh '''
-                    sudo docker run --rm \
+                    docker run --rm \
                       -v "$WORKSPACE:/src" \
                       ghcr.io/gitleaks/gitleaks:latest \
                       dir /src \
@@ -53,7 +53,7 @@ pipeline {
         stage('SCA - Dependency-Check') {
             steps {
                 sh '''
-                    sudo docker run --rm \
+                    docker run --rm \
                       -v "$WORKSPACE:/src" \
                       -v "$DEPENDENCY_DATA:/usr/share/dependency-check/data" \
                       owasp/dependency-check:latest \
@@ -68,7 +68,7 @@ pipeline {
         stage('Build container') {
             steps {
                 sh '''
-                    sudo docker build \
+                    docker build \
                       -t "$IMAGE_NAME:$BUILD_NUMBER" .
                 '''
             }
@@ -77,7 +77,7 @@ pipeline {
         stage('Container - Trivy') {
             steps {
                 sh '''
-                    sudo docker run --rm \
+                    docker run --rm \
                       -v /var/run/docker.sock:/var/run/docker.sock \
                       -v "$TRIVY_CACHE:/root/.cache/" \
                       -v "$WORKSPACE/reports:/reports" \
@@ -98,21 +98,21 @@ pipeline {
                     APP="devsecops-app-${BUILD_NUMBER}"
 
                     cleanup() {
-                      sudo docker rm -f "$APP" >/dev/null 2>&1 || true
-                      sudo docker network rm "$NET" >/dev/null 2>&1 || true
+                      docker rm -f "$APP" >/dev/null 2>&1 || true
+                      docker network rm "$NET" >/dev/null 2>&1 || true
                     }
 
                     cleanup
-                    sudo docker network create "$NET"
+                    docker network create "$NET"
 
                     trap cleanup EXIT
 
-                    sudo docker run -d \
+                    docker run -d \
                       --name "$APP" \
                       --network "$NET" \
                       "$IMAGE_NAME:$BUILD_NUMBER"
 
-                    sudo docker run --rm \
+                    docker run --rm \
                       --network "$NET" \
                       -v "$WORKSPACE/reports:/zap/wrk/:rw" \
                       ghcr.io/zaproxy/zaproxy:stable \
@@ -135,7 +135,7 @@ pipeline {
 
         cleanup {
             sh '''
-                sudo docker image rm \
+                docker image rm \
                   "$IMAGE_NAME:$BUILD_NUMBER" \
                   >/dev/null 2>&1 || true
             '''
