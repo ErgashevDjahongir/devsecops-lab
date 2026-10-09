@@ -42,6 +42,9 @@ pipeline {
                       /src \
                       --json \
                       --output /src/reports/semgrep.json
+
+                    test -s "$WORKSPACE/reports/semgrep.json"
+                    echo "Semgrep hisoboti yaratildi."
                 '''
             }
         }
@@ -58,6 +61,9 @@ pipeline {
                       --report-format json \
                       --report-path /src/reports/gitleaks.json \
                       --exit-code 0
+
+                    test -s "$WORKSPACE/reports/gitleaks.json"
+                    echo "Gitleaks hisoboti yaratildi."
                 '''
             }
         }
@@ -70,7 +76,7 @@ pipeline {
                     mkdir -p "$WORKSPACE/reports"
 
                     test -d "$DEPENDENCY_DATA" || {
-                        echo "ERROR: Dependency-Check data papkasi topilmadi"
+                        echo "ERROR: Dependency-Check data papkasi topilmadi."
                         exit 1
                     }
 
@@ -90,7 +96,7 @@ pipeline {
                       "$WORKSPACE/reports/dependency-check-report.json" \
                       > /dev/null
 
-                    echo "Dependency-Check JSON hisoboti muvaffaqiyatli yaratildi."
+                    echo "Dependency-Check JSON hisoboti yaratildi."
                 '''
             }
         }
@@ -102,6 +108,8 @@ pipeline {
 
                     docker build \
                       -t "$IMAGE_NAME:$BUILD_NUMBER" .
+
+                    echo "Docker image muvaffaqiyatli yaratildi."
                 '''
             }
         }
@@ -138,6 +146,7 @@ pipeline {
                     NET="devsecops-${BUILD_NUMBER}"
                     APP="devsecops-app-${BUILD_NUMBER}"
                     ZAP_WORK="$WORKSPACE/.zap-work-${BUILD_NUMBER}"
+                    ZAP_REPORT="$WORKSPACE/reports/zap-report.json"
 
                     cleanup() {
                         docker rm -f "$APP" >/dev/null 2>&1 || true
@@ -145,14 +154,13 @@ pipeline {
                         rm -rf "$ZAP_WORK"
                     }
 
-                    # Shu build uchun avvalgi qoldiqlarni tozalash
+                    # Oldingi qoldiqlarni tozalash
                     cleanup
 
                     mkdir -p "$WORKSPACE/reports" "$ZAP_WORK"
-
-                    # Faqat vaqtinchalik ZAP ish papkasiga yozish huquqi
                     chmod 777 "$ZAP_WORK"
 
+                    # Skript qanday tugashidan qat'i nazar, resurslarni tozalash
                     trap cleanup EXIT
 
                     docker network create "$NET"
@@ -162,8 +170,13 @@ pipeline {
                       --network "$NET" \
                       "$IMAGE_NAME:$BUILD_NUMBER"
 
+                    echo "Ilova ishga tushishi uchun kutish..."
+                    sleep 5
+
                     echo "OWASP ZAP skanerlash boshlandi..."
 
+                    # ZAP exit code hisobotni ko'chirishga xalaqit bermasin
+                    set +e
                     docker run --rm \
                       --network "$NET" \
                       -v "$ZAP_WORK:/zap/wrk/:rw" \
@@ -171,17 +184,53 @@ pipeline {
                       zap-baseline.py \
                       -t "http://$APP:5000" \
                       -J zap-report.json
+                    ZAP_EXIT=$?
+                    set -e
 
-                    # Hisobot yaratilganini va bo'sh emasligini tekshirish
-                    test -s "$ZAP_WORK/zap-report.json"
+                    echo "ZAP exit code: $ZAP_EXIT"
 
-                    # Hisobotni Jenkins workspace ichiga ko'chirish
-                    cp "$ZAP_WORK/zap-report.json" \
-                       "$WORKSPACE/reports/zap-report.json"
+                    echo "ZAP ishchi papkasi:"
+                    ls -lah "$ZAP_WORK"
 
-                    test -s "$WORKSPACE/reports/zap-report.json"
+                    # Hisobot yaratilganini tekshirish
+                    if [ ! -s "$ZAP_WORK/zap-report.json" ]; then
+                        echo "ERROR: ZAP JSON hisoboti yaratilmagan."
+                        exit 1
+                    fi
 
-                    echo "OWASP ZAP JSON hisoboti muvaffaqiyatli yaratildi."
+                    # Hisobotni Jenkins reports papkasiga saqlash
+                    cp "$ZAP_WORK/zap-report.json" "$ZAP_REPORT"
+
+                    test -s "$ZAP_REPORT"
+
+                    # JSON formatini tekshirish
+                    python3 -m json.tool "$ZAP_REPORT" > /dev/null
+
+                    echo "OWASP ZAP hisoboti saqlandi: reports/zap-report.json"
+
+                    # ZAP odatiy exit kodlari:
+                    # 0 - yangi WARN/FAIL yo'q
+                    # 1 - FAIL topilgan
+                    # 2 - WARN topilgan
+                    # 3 - WARN va FAIL topilgan
+                    #
+                    # Hisobot avval saqlanadi, keyin build siyosati qo'llanadi.
+                    case "$ZAP_EXIT" in
+                        0)
+                            echo "ZAP: yangi ogohlantirish yoki xato topilmadi."
+                            ;;
+                        2)
+                            echo "ZAP: ogohlantirishlar mavjud. Hisobotni tekshiring."
+                            ;;
+                        1|3)
+                            echo "ERROR: ZAP xavfsizlik xatolarini aniqladi."
+                            exit "$ZAP_EXIT"
+                            ;;
+                        *)
+                            echo "ERROR: ZAP kutilmagan exit code qaytardi: $ZAP_EXIT"
+                            exit 1
+                            ;;
+                    esac
                 '''
             }
         }
