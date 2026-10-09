@@ -12,9 +12,9 @@ pipeline {
     }
 
     environment {
-        IMAGE_NAME     = 'devsecops-demo'
+        IMAGE_NAME      = 'devsecops-demo'
         DEPENDENCY_DATA = '/opt/devsecops/dependency-data-clean'
-        TRIVY_CACHE    = '/opt/devsecops/trivy-cache'
+        TRIVY_CACHE     = '/opt/devsecops/trivy-cache'
     }
 
     stages {
@@ -23,7 +23,8 @@ pipeline {
                 checkout scm
 
                 sh '''
-                    mkdir -p reports
+                    set -eu
+                    mkdir -p "$WORKSPACE/reports"
                 '''
             }
         }
@@ -31,6 +32,8 @@ pipeline {
         stage('SAST - Semgrep') {
             steps {
                 sh '''
+                    set -eu
+
                     docker run --rm \
                       -v "$WORKSPACE:/src" \
                       semgrep/semgrep:latest \
@@ -46,6 +49,8 @@ pipeline {
         stage('Secrets - Gitleaks') {
             steps {
                 sh '''
+                    set -eu
+
                     docker run --rm \
                       -v "$WORKSPACE:/src" \
                       ghcr.io/gitleaks/gitleaks:latest \
@@ -93,6 +98,8 @@ pipeline {
         stage('Build container') {
             steps {
                 sh '''
+                    set -eu
+
                     docker build \
                       -t "$IMAGE_NAME:$BUILD_NUMBER" .
                 '''
@@ -102,7 +109,9 @@ pipeline {
         stage('Container - Trivy') {
             steps {
                 sh '''
-                    mkdir -p "$TRIVY_CACHE"
+                    set -eu
+
+                    mkdir -p "$TRIVY_CACHE" "$WORKSPACE/reports"
 
                     docker run --rm \
                       -v /var/run/docker.sock:/var/run/docker.sock \
@@ -113,6 +122,10 @@ pipeline {
                       --format json \
                       --output /reports/trivy-image.json \
                       "$IMAGE_NAME:$BUILD_NUMBER"
+
+                    test -s "$WORKSPACE/reports/trivy-image.json"
+
+                    echo "Trivy JSON hisoboti yaratildi."
                 '''
             }
         }
@@ -124,33 +137,51 @@ pipeline {
 
                     NET="devsecops-${BUILD_NUMBER}"
                     APP="devsecops-app-${BUILD_NUMBER}"
+                    ZAP_WORK="$WORKSPACE/.zap-work-${BUILD_NUMBER}"
 
                     cleanup() {
                         docker rm -f "$APP" >/dev/null 2>&1 || true
                         docker network rm "$NET" >/dev/null 2>&1 || true
+                        rm -rf "$ZAP_WORK"
                     }
 
+                    # Shu build uchun avvalgi qoldiqlarni tozalash
                     cleanup
-                    docker network create "$NET"
+
+                    mkdir -p "$WORKSPACE/reports" "$ZAP_WORK"
+
+                    # Faqat vaqtinchalik ZAP ish papkasiga yozish huquqi
+                    chmod 777 "$ZAP_WORK"
 
                     trap cleanup EXIT
+
+                    docker network create "$NET"
 
                     docker run -d \
                       --name "$APP" \
                       --network "$NET" \
                       "$IMAGE_NAME:$BUILD_NUMBER"
 
+                    echo "OWASP ZAP skanerlash boshlandi..."
+
                     docker run --rm \
                       --network "$NET" \
-                      -v "$WORKSPACE/reports:/zap/wrk/:rw" \
+                      -v "$ZAP_WORK:/zap/wrk/:rw" \
                       ghcr.io/zaproxy/zaproxy:stable \
                       zap-baseline.py \
                       -t "http://$APP:5000" \
                       -J zap-report.json
 
+                    # Hisobot yaratilganini va bo'sh emasligini tekshirish
+                    test -s "$ZAP_WORK/zap-report.json"
+
+                    # Hisobotni Jenkins workspace ichiga ko'chirish
+                    cp "$ZAP_WORK/zap-report.json" \
+                       "$WORKSPACE/reports/zap-report.json"
+
                     test -s "$WORKSPACE/reports/zap-report.json"
 
-                    echo "OWASP ZAP hisoboti yaratildi."
+                    echo "OWASP ZAP JSON hisoboti muvaffaqiyatli yaratildi."
                 '''
             }
         }
